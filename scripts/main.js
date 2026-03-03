@@ -226,3 +226,8 @@ function trainLoop() {
     }, 100);
 }
 setTimeout(trainLoop, 1000 * env.training_interval / env.speed_scale);
+
+// TODO
+// Add touch support for mobile
+// Add checkbox to toggle if we should train
+// Make slider immune to changing pointer when dragging

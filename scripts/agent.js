@@ -30,7 +30,7 @@ export function getForce(x, y, vx, vy, target_x, target_y) {
 function getReward(x, y, vx, vy, target_x, target_y) {
     let distance_to_target = Math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2);
     let velocity_mag = Math.sqrt(vx * vx + vy * vy);
-    return -distance_to_target // - .1 * velocity_mag;
+    return -distance_to_target - .2 * velocity_mag;
 }
 
 // Modify agent's reward by a certain amount (e.g. for hitting walls)
@@ -46,6 +46,7 @@ export function trainModel() {
     // Prepare training data from memory
     let states = memory.map(exp => exp.state);
     let rewards = memory.map(exp => exp.reward);
+    let reward_mods = memory.map(exp => exp.reward_mod);
     let actions = memory.map(exp => exp.action);
     let log_probs = memory.map(exp => exp.log_prob);
     let values = memory.map(exp => exp.value);
@@ -53,13 +54,13 @@ export function trainModel() {
     // Get differences between subsequent rewards and add reward modifications
     let reward_diffs = [];
     for (let i = 1; i < rewards.length; i++) {
-        reward_diffs.push(rewards[i] - rewards[i - 1] + memory[i].reward_mod);
+        reward_diffs.push(rewards[i] - rewards[i - 1] + reward_mods[i]);
     }
+    rewards = reward_diffs;
 
     // Omit last state and action since they don't have a subsequent reward
     // Could also consider using the reward of the last state, but for less frontent calling
     let last_state = states.pop();
-    rewards = reward_diffs;
     actions.pop();
     log_probs.pop();
     values.pop();
@@ -82,14 +83,23 @@ export function trainModel() {
     let batch_size = 64;
     console.log("Training on " + states.length + " samples");
     for (let epoch = 0; epoch < epochs; epoch++) {
+        // Shuffle data at the start of each epoch
+        let indices = tf.util.createShuffledIndices(states.length);
+        states = indices.map(i => states[i]);
+        // rewards = indices.map(i => rewards[i]);
+        actions = indices.map(i => actions[i]);
+        log_probs = indices.map(i => log_probs[i]);
+        advantages = indices.map(i => advantages[i]);
+        values = indices.map(i => values.arraySync()[i]);
+
         for (let i = 0; i < states.length; i += batch_size) {
             // Subset detached data for batch
-            let batch_states = states.slice(i, i + batch_size);
-            let batch_rewards = rewards.slice(i, i + batch_size);
-            let batch_actions = actions.slice(i, i + batch_size);
-            let batch_log_probs = log_probs.slice(i, i + batch_size);
-            let batch_advantages = advantages.slice(i, i + batch_size);
-            let batch_values = values.arraySync().slice(i, i + batch_size);
+            let batch_states = states.slice(i * batch_size, (i + 1) * batch_size);
+            // let batch_rewards = rewards.slice(i * batch_size, (i + 1) * batch_size);
+            let batch_actions = actions.slice(i * batch_size, (i + 1) * batch_size);
+            let batch_log_probs = log_probs.slice(i * batch_size, (i + 1) * batch_size);
+            let batch_advantages = advantages.slice(i * batch_size, (i + 1) * batch_size);
+            let batch_values = values.arraySync().slice(i * batch_size, (i + 1) * batch_size);
 
             // Normalize advantages
             let adv_mean = tf.mean(tf.tensor1d(batch_advantages)).arraySync();
@@ -147,17 +157,17 @@ export function getModelVersion() {
 // Create model
 var model_iteration = 0;
 const model = tf.sequential();
-model.add(tf.layers.dense({ inputShape: [6], units: 16, activation: "relu" }));
+model.add(tf.layers.dense({ inputShape: [6], units: 32, activation: "prelu" }));
 model.add(tf.layers.layerNormalization());
-model.add(tf.layers.dense({ units: 16, activation: "relu" }));
+model.add(tf.layers.dense({ units: 32, activation: "prelu" }));
 model.add(tf.layers.layerNormalization());
 model.add(tf.layers.dense({ units: 2, activation: "tanh" }));
 
 // Create critic model
 const critic_model = tf.sequential();
-critic_model.add(tf.layers.dense({ inputShape: [6], units: 16, activation: "relu" }));
+critic_model.add(tf.layers.dense({ inputShape: [6], units: 32, activation: "prelu" }));
 model.add(tf.layers.layerNormalization());
-critic_model.add(tf.layers.dense({ units: 16, activation: "relu" }));
+critic_model.add(tf.layers.dense({ units: 32, activation: "prelu" }));
 model.add(tf.layers.layerNormalization());
 critic_model.add(tf.layers.dense({ units: 1 }));
 

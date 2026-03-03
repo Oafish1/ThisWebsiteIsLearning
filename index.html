@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>This Website is Learning</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script type="module" src="./scripts/main.js" defer></script>
+</head>
+<body>
+    <div id="controls">
+        <label for="simulation-speed-slider" id="simulation-speed-text" style="min-width: 75px;"></label>
+        <input type="range" id="simulation-speed-slider" min="1" max="100" step="1" value="20">
+    </div>
+    <canvas id="main-window"></canvas>
+</body>
+</html>
+<!-- npx http-server . -o -p 9999  -->

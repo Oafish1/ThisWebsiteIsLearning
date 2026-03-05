@@ -1,3 +1,14 @@
+### 2026.3.4
+- Add random start positioning
+- Add random velocity limit
+- Clear WebGL cache regularly
+- Fix action sampling
+- Fix log likelihood calculation
+- Fix remaining bugs, allowing the model to learn
+- Massively increase default speed limit
+- Remove asynchronous functions from training
+- Use `tf.tidy()` when training to prevent memory leaks
+
 ### 2026.3.3
 - Add action penalty
 - Add delta time reward scaling

@@ -2,14 +2,21 @@
 await tf.ready();
 
 // Global variables
-var std = .25;
+var std = 0.1;
+
+// Log probability calculation for Gaussian distribution: https://stats.stackexchange.com/questions/7440/likelihood-function-of-normal-distribution/7441#7441
+function gaussianLogProb(action, mu, sigma) {
+    return tf.sum(tf.sub(- .5 * Math.log(2 * Math.PI * std * std), tf.square(tf.sub(action, mu)).div(2 * sigma * sigma)), 1);
+}
 
 // Public function to get force from model
-export function getForce(x, y, vx, vy, target_x, target_y, delta_time) {
+function _getForce(x, y, vx, vy, target_x, target_y, delta_time) {
     // Plug into model
     let input_tensor = tf.tensor2d([[x, y, vx, vy, target_x, target_y]]);
     let action_means = actor_model.predict(input_tensor);
-    let action = tf.randomNormal([2], action_means[0], std);  // Sample from Gaussian
+
+    // Sample action from Gaussian distribution with mean from model and fixed std
+    let action = tf.randomNormal([2], 0, std).reshape(action_means.shape).add(action_means);
 
     // Compute previous reward
     let reward_prerequisites = computeRewardPrerequisites(x, y, vx, vy, target_x, target_y);
@@ -22,15 +29,16 @@ export function getForce(x, y, vx, vy, target_x, target_y, delta_time) {
         reward_prerequisites: reward_prerequisites,
         reward: 0,
         action: action_cpu, 
-        log_prob: tf.sum(tf.sub(- .5 * Math.log(2 * Math.PI * std * std), tf.square(tf.sub(action, action_means)).div(-2 * std * std)), 1).dataSync()[0],
+        log_prob: gaussianLogProb(action, action_means, std).dataSync()[0],
         value: critic_model.predict(input_tensor).dataSync()[0] * return_std + return_mean,
-        terminal: false
-        // truncated: false
+        terminal: false,
+        truncated: false
     });
 
     // Return
     return { x: action_cpu[0], y: action_cpu[1] };
 }
+export const getForce = (...args) => tf.tidy(() => _getForce(...args));  // Wrap in tidy to prevent memory leaks
 
 // Get previous reward
 export function getPreviousReward() {
@@ -50,7 +58,7 @@ function computeRewardPrerequisites(x, y, vx, vy, target_x, target_y) {
 
 // Reward function based on distance to target and low velocity
 function updatePreviousReward(new_reward_prerequisites, delta_time) {
-    if (memory.length > 0 && !memory[memory.length - 1].terminal) {
+    if (memory.length > 0 && !memory[memory.length - 1].terminal && !memory[memory.length - 1].truncated) {
         // Get old reward prerequisites and initialize
         let action = memory[memory.length - 1].action;
         let old_reward_prerequisites = memory[memory.length - 1].reward_prerequisites;
@@ -67,24 +75,38 @@ function updatePreviousReward(new_reward_prerequisites, delta_time) {
         let action_reward = - Math.sqrt(action[0] * action[0] + action[1] * action[1]) * 1e0;
 
         // Record
-        memory[memory.length - 1].reward += 10 * dist_reward + 2 * vel_reward + 0 * action_reward;
+        let reward = 10 * dist_reward + 0 * vel_reward + 0 * action_reward;  // 10 2 0
+        memory[memory.length - 1].reward += 1e-2 * reward;  // Scale down reward to speed up initial convergence by the critic
+
         // console.log("Reward: " + memory[memory.length - 1].reward.toFixed(3) + " (Dist: " + dist_reward.toFixed(3) + ", Vel: " + vel_reward.toFixed(3) + ", Act: " + action_reward.toFixed(3) + ")");
     }
 }
 
 // Modify agent's reward by a certain amount (e.g. for hitting walls)
 // Doesn't matter too much if it's on this or the next reward
-export function modifyReward(amount, terminal=false) {  // , truncated=false
+export function modifyReward(amount, terminal=false, truncated=false) {
     if (memory.length > 0) {
         memory[memory.length - 1].reward += amount;
         memory[memory.length - 1].terminal = terminal;
-        // memory[memory.length - 1].truncated = truncated;
+        memory[memory.length - 1].truncated = truncated;
     }
 }
 
+// Synchronous boolean masking
+// https://github.com/tensorflow/tfjs/issues/380#issuecomment-3474357825
+function _booleanMask(tensor, mask) {
+    let count = tf.sum(mask).arraySync();
+    let indices = tf.range(0, tensor.shape[0]);
+    let top = tf.topk(tf.where(mask, indices, tf.scalar(-1)), count);
+    return tf.gather(tensor, top.indices);
+}
+export const booleanMask = (...args) => tf.tidy(() => _booleanMask(...args));
+
 // Train the model using PPO
-export async function trainModel() {
+function _trainModel() {
     // Parameters
+    // 5 | 512 | 10 - Works well, a bit slow
+    // 5 | 64 | 10 - Works, avoids walls around V106
     let epochs = 5;
     let batch_size = 512;
     let min_memories = 10 * batch_size;
@@ -96,7 +118,7 @@ export async function trainModel() {
     let log_probs = memory.map(exp => exp.log_prob);
     let values = memory.map(exp => exp.value);
     let terminals = memory.map(exp => exp.terminal);
-    // let truncateds = memory.map(exp => exp.truncated);
+    let truncateds = memory.map(exp => exp.truncated);
 
     // Omit last state and action since they don't have a subsequent reward
     // Could also consider computing one more state, but omit for less frontent calling
@@ -106,35 +128,49 @@ export async function trainModel() {
     log_probs.pop();
     values.pop();
     terminals.pop();
-    // truncateds.pop();
+    truncateds.pop();
 
     // Apply GAE to rewards using critic model
     let advantages = [];
     let usable_mask = [];
-    let from_terminal = [];
     let next_advantage = 0;
-    // Bootstrap in case not terminal
+    // Bootstrap in case truncated
     let next_state_value = critic_model.predict(tf.tensor2d([last_state])).arraySync()[0][0] * return_std + return_mean;  // Unnormalize value for GAE calculation
     let gamma = 0.99;  // Discount factor
     let lambda = 0.95;
+    let terminates = false;
     for (let i = rewards.length - 1; i >= 0; i--) {
         // Set next state value to 0 if terminal
         if (terminals[i]) {
             next_advantage = 0;
             next_state_value = 0;
+            terminates = true;
+        }
+        // If next is truncated, use state to bootstrap
+        else if (i+1 < truncateds.length && truncateds[i+1]) {
+            next_advantage = 0;
+            next_state_value = critic_model.predict(tf.tensor2d([states[i]])).arraySync()[0][0] * return_std + return_mean;
+            terminates = false;
+
+            advantages.unshift(next_advantage);
+            usable_mask.unshift(false);
+            continue;  // Don't use truncated states for training, but do use for bootstrapping next state value
         }
         let delta = rewards[i] + gamma * next_state_value - values[i];
         next_advantage = delta + gamma * lambda * next_advantage;
         next_state_value = values[i];
         advantages.unshift(next_advantage);
-        usable_mask.unshift(terminals[i] || (usable_mask.length > 0 && usable_mask[0]));
+        // Only use if not truncated or last, and if terminates eventually
+        // usable_mask.unshift(terminates);
+        // usable_mask.unshift(true); 
+        usable_mask.unshift(true);
     }
 
     // If there are no terminated episodes, just use truncated
-    if (!usable_mask[0]) {
-        usable_mask = Array(usable_mask.length).fill(true);  // Could also consider truncateds
-        console.log("No terminated episodes, using all memories for training.");
-    }
+    // if (!usable_mask[0]) {
+    //     usable_mask = Array(usable_mask.length).fill(true);  // Could also consider truncateds
+    //     console.log("No terminated episodes, using all memories for training.");
+    // }
 
     // Convert to tensors
     states = tf.tensor2d(states);
@@ -154,12 +190,12 @@ export async function trainModel() {
 
     // Filter out unterminated memories
     usable_mask = tf.tensor1d(usable_mask, 'bool');
-    states = await tf.booleanMaskAsync(states, usable_mask);
-    rewards = await tf.booleanMaskAsync(rewards, usable_mask);
-    actions = await tf.booleanMaskAsync(actions, usable_mask);
-    log_probs = await tf.booleanMaskAsync(log_probs, usable_mask);
-    advantages = await tf.booleanMaskAsync(advantages, usable_mask);
-    values = await tf.booleanMaskAsync(values, usable_mask);
+    states = booleanMask(states, usable_mask);
+    rewards = booleanMask(rewards, usable_mask);
+    actions = booleanMask(actions, usable_mask);
+    log_probs = booleanMask(log_probs, usable_mask);
+    advantages = booleanMask(advantages, usable_mask);
+    values = booleanMask(values, usable_mask);
 
     // Iterate epochs and train on batches
     console.log("Training on " + states.shape[0] + " states");
@@ -184,19 +220,19 @@ export async function trainModel() {
             let adv_mean = tf.mean(batch_advantages);
             let adv_std = tf.sqrt(tf.mean(tf.square(batch_advantages.sub(adv_mean))));
             let normalized_batch_advantages = batch_advantages.sub(adv_mean).div(adv_std.add(1e-8));
-
+            
             // Train actor model using continuous PPO loss
             let actor_loss = actor_optimizer.minimize(() => {
                 let action_means = actor_model.predict(batch_states);
-                let action_diffs = tf.sub(batch_actions, action_means);
-                let log_probs = tf.sum(tf.sub(- .5 * Math.log(2 * Math.PI * std * std), tf.mul(action_diffs, action_diffs).div(-2 * std * std)), 1);
+                // let action_diffs = tf.sub(batch_actions, action_means);
+                let log_probs = gaussianLogProb(batch_actions, action_means, std);
                 let ratios = tf.exp(tf.sub(log_probs, batch_log_probs));
                 let surrogate1 = tf.mul(ratios, normalized_batch_advantages);
                 let eps = .2;
                 let surrogate2 = tf.mul(tf.clipByValue(ratios, 1 - eps, 1 + eps), normalized_batch_advantages);
                 let actor_loss = tf.neg(tf.mean(tf.minimum(surrogate1, surrogate2)));
                 return actor_loss;
-            }, true, actor_model.trainableVariables);
+            }, true);  // , actor_model.trainableVariables
 
             // Compute returns by adding batch_advantages to batch_values
             let batch_returns = batch_advantages.add(batch_values);
@@ -207,13 +243,13 @@ export async function trainModel() {
                 let values = critic_model.predict(batch_states).reshape([-1]);
                 let critic_loss = tf.losses.meanSquaredError(normalized_batch_returns, values);
                 return critic_loss;
-            }, true, critic_model.trainableVariables);
+            }, true);  // , critic_model.trainableVariables
 
             // Print training losses
             // console.log("Epoch " + epoch + ", Batch " + (i / batch_size) + ": Actor Loss = " + actor_loss.arraySync().toFixed(3) + ", Critic Loss = " + critic_loss.arraySync().toFixed(3));
             
             // Update running mean and std
-            let beta = 3e-4;
+            let beta = 3e-3;
             let old_return_mean = return_mean;
             let old_return_std = return_std;
             return_mean = (1 - beta) * return_mean + beta * tf.mean(batch_returns).arraySync();  // ArraySync prevents NaN from combining tensor and scalar
@@ -232,6 +268,7 @@ export async function trainModel() {
     model_iteration++;
 
     // Clear used memories after training, i.e. those in usable mask
+    // IMPORTANT: Assumes that ending memories are contiguous
     memory = memory.filter((_, index) => !usable_mask.arraySync()[index]);  // Could optimize
     console.log("Leaving " + memory.length + " memories for next training iteration");
 
@@ -242,6 +279,7 @@ export async function trainModel() {
 
     return true;
 }
+export const trainModel = (...args) => tf.tidy(() => _trainModel(...args));
 
 export function getModelVersion() {
     return model_iteration;

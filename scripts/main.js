@@ -5,6 +5,9 @@ tf.setBackend("webgpu").then(() => {
     console.error("Error setting WebGPU backend:", error);
 });
 
+// Clear webgl tensors at 256MiB to prevent memory leaks
+tf.env().set("WEBGL_DELETE_TEXTURE_THRESHOLD", 256000000);
+
 // Import
 import { getForce, trainModel, getModelVersion, modifyReward, getPreviousReward } from "./agent.js";
 
@@ -76,12 +79,13 @@ const circle = {
 
 const env = {
     speed_scale: 20,
-    velocity_limit: .2,
+    velocity_limit: 5,
+    rand_velocity_limit: .5,
     wall_force_scale: 2,
     draw_max_delta: .5,
     update_min_delta: .1,
-    update_max_delta: .1  // Normally .2
-}
+    update_max_delta: .2  // Normally .2
+};
 
 // Set speed scale
 function setSpeedScale(new_scale) {
@@ -127,8 +131,8 @@ function draw(new_time) {
         let force = getForce(
             circle.x / canvas.width,
             circle.y / canvas.height,
-            circle.vx / canvas.width,
-            circle.vy / canvas.height,
+            circle.vx / (canvas.width * env.velocity_limit),
+            circle.vy / (canvas.height * env.velocity_limit),
             pointer.x / canvas.width,
             pointer.y / canvas.height,
             update_delta_time);
@@ -204,11 +208,20 @@ function draw(new_time) {
 
     // Reset and terminate if out of bounds
     if ((circle.x + circle.r < 0) || (circle.x - circle.r > canvas.width) || (circle.y + circle.r < 0) || (circle.y - circle.r > canvas.height)) {
-        circle.x = canvas.width / 2;
-        circle.y = canvas.height / 2;
-        circle.vx = 0;
-        circle.vy = 0;
-        modifyReward(-100, true);  // Terminate
+        // Center
+        // circle.x = canvas.width / 2;
+        // circle.y = canvas.height / 2;
+        // circle.vx = 0;
+        // circle.vy = 0;
+
+        // Random position and velocity
+        circle.x = Math.random() * canvas.width;
+        circle.y = Math.random() * canvas.height;
+        circle.vx = 2 * (Math.random() - 0.5) * env.rand_velocity_limit * canvas.width;
+        circle.vy = 2 * (Math.random() - 0.5) * env.rand_velocity_limit * canvas.height;
+
+        // Ending
+        modifyReward(-1, true);  // Terminate
         // modifyReward(0, true);  // Terminate with no penalty
         // modifyReward(0, false, true);  // Truncate
     }
@@ -260,12 +273,11 @@ async function trainLoop() {
     setTimeout(() => {
         // Begin training
         let begin_time = performance.now();
-        trainModel().then((trained) => {
-            if ( trained ) {
-                console.log("Model trained (V" + getModelVersion() + "), training took " + (performance.now() - begin_time) / 1000 + " s");
-                console.log();
-            }
-        });
+        if ( trainModel() ) {
+            console.log("Model trained (V" + getModelVersion() + "), training took " + (performance.now() - begin_time) / 1000 + " s");
+            console.log("Number of tensors after training: " + tf.memory().numTensors);  // Test memory leaks
+            console.log();
+        }
         circle.training = false;
         setTimeout(trainLoop, 1000);  // Schedule next training loop, don't use setInterval to avoid cutting into inference time if training takes too long
     }, 100);
@@ -279,3 +291,4 @@ setTimeout(trainLoop, 1000);
 // Plot graph of mean reward
 // Add eyes to circle based on where facing
 // Make parameters user-adjustable
+// Add trainable std and entropy bonus

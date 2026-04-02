@@ -97,6 +97,9 @@ var update_delta_time = 0;
 
 // Main drawing function
 function draw(new_time) {
+    // Record current time
+    // var new_time = performance.now();
+
     // Compute delta time
     let draw_delta_time = new_time - prev_draw_time;
     draw_delta_time = draw_delta_time * env.speed_scale;  // Scale by speed scale factor
@@ -136,6 +139,8 @@ function draw(new_time) {
             pointer.x / canvas.width,
             pointer.y / canvas.height,
             update_delta_time);
+
+        // Update velocity based on an instantaneous force
         force.x = force.x * env.velocity_limit * canvas.width;
         force.y = force.y * env.velocity_limit * canvas.height;
         circle.vx += force.x * update_delta_time;
@@ -251,11 +256,15 @@ function draw(new_time) {
     ctx.fill();
     ctx.closePath();
 
+    // Loop
     window.requestAnimationFrame(draw);
+    // draw();
+    // setTimeout(draw, 1);
 }
 
 // Loop animation
 window.requestAnimationFrame(draw);
+// draw();
 
 // Add event listener for speed scale slider and update speed-scale-text when it changes
 function updateSpeedScaleSlider() {

@@ -1,3 +1,8 @@
+### 2026.4.1
+- Clean up `README`
+- Try action holding
+- Revise training parameters for visualization and training efficiency
+
 ### 2026.3.4
 - Add random start positioning
 - Add random velocity limit

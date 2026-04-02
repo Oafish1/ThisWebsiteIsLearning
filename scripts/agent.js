@@ -2,7 +2,7 @@
 await tf.ready();
 
 // Global variables
-var std = 0.1;
+var std = 0.5;
 
 // Log probability calculation for Gaussian distribution: https://stats.stackexchange.com/questions/7440/likelihood-function-of-normal-distribution/7441#7441
 function gaussianLogProb(action, mu, sigma) {

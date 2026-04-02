@@ -79,12 +79,12 @@ const circle = {
 
 const env = {
     speed_scale: 20,
-    velocity_limit: 5,
+    velocity_limit: 1,
     rand_velocity_limit: .5,
     wall_force_scale: 2,
     draw_max_delta: .5,
     update_min_delta: .1,
-    update_max_delta: .2  // Normally .2
+    update_max_delta: .1  // Normally .2
 };
 
 // Set speed scale

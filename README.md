@@ -18,6 +18,7 @@ Simply [open the webpage](https://oafish1.github.io/ThisWebsiteIsLearning/) and 
 
 - **Failure Case**: Upon exceeding the edge of the webpage, the episode is terminated and a negative reward is applied. Several other methodologies were tested, including bouncing off walls and never terminating.
 - **Training Parameters**: The model updates with a batch size of `512` and an epoch size of `5120`, spanning `5` epochs per update iteration, balancing visible improvement between updates with optimal performance.
+- **Memory Sampling**: The update will attempt to only use terminal episodes for training, if possible, to get the best estimation of long-term rewards.
 - **Rewards**: The agent is rewarded based on two criterion, namely, decreasing velocity and approaching the target dot.
 
 ## Potential Future Improvements
@@ -32,4 +33,4 @@ Simply [open the webpage](https://oafish1.github.io/ThisWebsiteIsLearning/) and 
 
 ## Demo Video
 
-
+![Preview of website functionality after training](./resources/demo.gif)

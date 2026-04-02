@@ -1,3 +1,7 @@
+### 2026.4.1.2
+- Add demo video to `README`
+- Additional `README` details
+
 ### 2026.4.1.1
 - Adjust `README` to be more clear and add more details/future work
 - Readjust entropy and environment speed to promote effective training
